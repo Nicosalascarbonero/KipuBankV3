@@ -1,4 +1,3 @@
-
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
@@ -148,4 +147,112 @@ contract KipuBankV2 is Ownable, ReentrancyGuard {
 
         IERC20(token).safeTransferFrom(msg.sender, address(this), amount);
         uint256 usdcReceived = _swapToUSDC(token, amount, address(this));
-        _finalizeDeposit
+        _finalizeDeposit(usdcReceived);
+    }
+
+    // --- SWAP A USDC ---
+    /**
+     * @dev Realiza el swap del token de entrada a USDC con protección de slippage.
+     * @return usdcOut Cantidad de USDC recibida.
+     */
+    function _swapToUSDC(address tokenIn, uint256 amountIn, address to) private returns (uint256 usdcOut) {
+        IERC20(tokenIn).safeApprove(UNISWAP_ROUTER, amountIn);
+
+        address[] memory path = new address[](2);
+        path[0] = tokenIn;
+        path[1] = USDC;
+
+        uint256[] memory amountsOut = IUniswapV2Router02(UNISWAP_ROUTER).getAmountsOut(amountIn, path);
+        uint256 minOut = amountsOut[1] * (BPS - SLIPPAGE_BPS) / BPS;
+
+        uint256[] memory amounts = IUniswapV2Router02(UNISWAP_ROUTER).swapExactTokensForTokens(
+            amountIn,
+            minOut,
+            path,
+            to,
+            block.timestamp + 300
+        );
+
+        usdcOut = amounts[1];
+        if (usdcOut < minOut) revert SwapFailed(minOut, usdcOut);
+
+        emit SwapExecuted(tokenIn, amountIn, usdcOut);
+    }
+
+    // --- FINALIZAR DEPÓSITO (CEI) ---
+    /**
+     * @dev Valida el límite del banco **después** de recibir el USDC real y actualiza los balances.
+     */
+    function _finalizeDeposit(uint256 usdcReceived) private {
+        // CHECK: límite en USD usando precio real de Chainlink
+        uint256 usdcValueUSD = _usdcToUSD(usdcReceived);
+        uint256 currentUSD = _currentBankValueUSD();
+        if (currentUSD + usdcValueUSD > BANK_CAP_USD) {
+            revert CapExceeded(BANK_CAP_USD - currentUSD, usdcValueUSD);
+        }
+
+        // EFFECTS
+        s_balances[msg.sender] += usdcReceived;
+        totalUSDC += usdcReceived;
+        totalDeposits++;
+
+        emit Deposit(msg.sender, address(0), 0, usdcReceived, s_balances[msg.sender]);
+    }
+
+    // --- RETIROS ---
+    /**
+     * @notice Retira USDC al usuario.
+     * @param usdcAmount Cantidad de USDC a retirar (6 decimales).
+     */
+    function withdraw(uint256 usdcAmount) external nonReentrant {
+        if (usdcAmount == 0) revert ZeroAmount();
+        uint256 bal = s_balances[msg.sender];
+        if (usdcAmount > bal) revert InsufficientBalance(usdcAmount, bal);
+
+        // EFFECTS
+        s_balances[msg.sender] = bal - usdcAmount;
+        totalUSDC -= usdcAmount;
+        totalWithdrawals++;
+
+        // INTERACTION
+        IERC20(USDC).safeTransfer(msg.sender, usdcAmount);
+
+        emit Withdrawal(msg.sender, usdcAmount, s_balances[msg.sender]);
+    }
+
+    // --- ORÁCULO ---
+    /**
+     * @dev Convierte USDC (6 decimales) a USD (8 decimales) usando el feed USDC/USD.
+     */
+    function _usdcToUSD(uint256 usdcAmount) private view returns (uint256) {
+        (, int256 price, , uint256 updatedAt, ) = USDC_USD_FEED.latestRoundData();
+        if (price <= 0 || block.timestamp - updatedAt > 3600) revert ChainlinkCallFailed();
+        // usdcAmount (6 dec) * price (8 dec) / 10¹⁴  →  USD con 8 decimales
+        return (usdcAmount * uint256(price)) / 1e14;
+    }
+
+    function _currentBankValueUSD() private view returns (uint256) {
+        return _usdcToUSD(totalUSDC);
+    }
+
+    // --- VISTAS ---
+    function getBalance(address user) external view returns (uint256) {
+        return s_balances[user];
+    }
+
+    function getBankCapUSD() external view returns (uint256) {
+        return BANK_CAP_USD;
+    }
+
+    function getCurrentBankValueUSD() external view returns (uint256) {
+        return _currentBankValueUSD();
+    }
+
+    function getTotalDeposits() external view returns (uint256) {
+        return totalDeposits;
+    }
+
+    function getTotalWithdrawals() external view returns (uint256) {
+        return totalWithdrawals;
+    }
+}
