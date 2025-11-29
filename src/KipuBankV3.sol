@@ -86,7 +86,7 @@ interface IUniswapV2Router02 {
     function getPair(address tokenA, address tokenB) external view returns (address pair);
 }/* =============================================================
    CONTRATO PRINCIPAL: KipuBankV3
-   ============================================================= */contract KipuBankV2 is Ownable, ReentrancyGuard {
+   ============================================================= */contract KipuBankV3 is Ownable, ReentrancyGuard {
     using SafeERC20 for IERC20;address public immutable USDC;
 address public immutable UNISWAP_ROUTER;
 address public immutable UNISWAP_FACTORY;
