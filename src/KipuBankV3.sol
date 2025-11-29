@@ -2,6 +2,10 @@
 pragma solidity ^0.8.20;/* =============================================================
    TODO PEGADO ADENTRO: OpenZeppelin + Chainlink + Uniswap
    ============================================================= */// --- Context ---
+/// @title KipuBankV3 – Banco DeFi con swap automático y límite en dólares
+/// @author Nicolás Salas Carbonero (Nicosalascarbonero)
+/// @notice Banco que convierte cualquier token o ETH a USDC con cap global en USD
+
 abstract contract Context {
     function _msgSender() internal view virtual returns (address) {
         return msg.sender;
@@ -100,18 +104,26 @@ uint256 public totalUSDC;
 uint256 public totalDeposits;
 uint256 public totalWithdrawals;
 
-error NoUSDCTradingPair(address token);
-error SwapFailed(uint256 expectedMin, uint256 received);
-error CapExceeded(uint256 availableUSD, uint256 attemptedUSD);
-error InsufficientBalance(uint256 requested, uint256 available);
-error ZeroAmount();
-error TransferFailed();
-error ChainlinkCallFailed();
-
+/* ====================== ERRORES ====================== */
+    /// @notice No existe par de trading USDC para el token indicado
+    error NoUSDCTradingPair(address token);
+    /// @notice El swap devolvió menos USDC del esperado (slippage)
+    error SwapFailed(uint256 expectedMin, uint256 received);
+    /// @notice El depósito superaría el cap del banco en dólares
+    error CapExceeded(uint256 availableUSD, uint256 attemptedUSD);
+    /// @notice El usuario no tiene suficiente balance
+    error InsufficientBalance(uint256 requested, uint256 available);
+    /// @notice Cantidad cero no permitida
+    error ZeroAmount();
+    /// @notice Falló la transferencia o el wrap de WETH
+    error TransferFailed();
+    /// @notice El precio de Chainlink es inválido o está vencido (>1h)
+    error ChainlinkCallFailed();
+/* ====================== EVENTOS ====================== */
 event Deposit(address indexed user, address indexed tokenIn, uint256 amountIn, uint256 usdcReceived, uint256 newBalance);
 event Withdrawal(address indexed user, uint256 usdcAmount, uint256 newBalance);
 event SwapExecuted(address indexed tokenIn, uint256 amountIn, uint256 usdcOut);
-
+/* ====================== CONSTRUCTOR ====================== */
 constructor(
         address usdc,
         address uniswapRouter,
@@ -125,9 +137,11 @@ constructor(
         USDC_USD_FEED = AggregatorV3Interface(usdcUsdFeed);
         BANK_CAP_USD = bankCapUSD;
     }
-
+/* ====================== DEPÓSITOS ====================== */
+    /// @notice Permite recibir ETH directamente (fallback)
 receive() external payable { _depositETH(); }
-
+/// @notice Deposita ETH nativo y lo convierte automáticamente a USDC
+/// @dev Función payable con protección reentrancy
 function depositETH() external payable nonReentrant { _depositETH(); }
 
 function depositToken(address token, uint256 amount) external nonReentrant { _depositToken(token, amount); }
@@ -142,7 +156,9 @@ function _depositETH() private {
     uint256 usdcReceived = _swapToUSDC(weth, msg.value, address(this));
     _finalizeDeposit(msg.sender, weth, msg.value, usdcReceived);
 }
-
+/// @notice Deposita cualquier ERC20 y lo convierte a USDC (si ya es USDC, queda igual)
+/// @param token Dirección del token a depositar
+/// @param amount Cantidad del token (con sus decimales originales)
 function _depositToken(address token, uint256 amount) private {
     if (amount == 0) revert ZeroAmount();
     if (token == USDC) {
@@ -181,7 +197,9 @@ function _finalizeDeposit(address user, address tokenIn, uint256 amountIn, uint2
     totalDeposits++;
     emit Deposit(user, tokenIn, amountIn, usdcReceived, s_balances[user]);
 }
-
+/* ====================== RETIROS ====================== */
+/// @notice Permite retirar USDC del banco
+/// @param usdcAmount Cantidad de USDC (6 decimales) a retirar
 function withdraw(uint256 usdcAmount) external nonReentrant {
     if (usdcAmount == 0) revert ZeroAmount();
     uint256 bal = s_balances[msg.sender];
@@ -202,7 +220,10 @@ function _usdcToUSD(uint256 usdcAmount) private view returns (uint256) {
 function _currentBankValueUSD() private view returns (uint256) {
     return _usdcToUSD(totalUSDC);
 }
-
+/* ====================== CONSULTAS ====================== */
+    /// @notice Consulta el balance en USDC de un usuario
+    /// @param user Dirección del usuario
+    /// @return Balance en USDC (6 decimales)
 function getBalance(address user) external view returns (uint256) { return s_balances[user]; }
 function getCurrentBankValueUSD() external view returns (uint256) { return _currentBankValueUSD(); }}
 
